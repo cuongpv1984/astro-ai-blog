@@ -70,6 +70,40 @@ function extractJson(text) {
   }
 }
 
+function extractGeminiText(data) {
+  if (typeof data?.output_text === "string") return data.output_text;
+  if (typeof data?.outputText === "string") return data.outputText;
+  if (Array.isArray(data?.candidates)) {
+    const candidateText = data.candidates
+      .flatMap((candidate) => candidate.content?.parts || [])
+      .map((part) => part.text)
+      .filter(Boolean)
+      .join("\n");
+    if (candidateText) return candidateText;
+  }
+
+  const found = [];
+  const visit = (value, key = "") => {
+    if (!value) return;
+    if (typeof value === "string") {
+      if (["text", "output_text", "outputText"].includes(key)) {
+        found.push(value);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item) => visit(item));
+      return;
+    }
+    if (typeof value === "object") {
+      Object.entries(value).forEach(([childKey, childValue]) => visit(childValue, childKey));
+    }
+  };
+
+  visit(data);
+  return found.join("\n");
+}
+
 async function buildPrompt() {
   const recentPosts = await listRecentPosts();
   return `Create one original daily blog article in ${language}.
@@ -208,13 +242,10 @@ async function requestArticleWithGemini() {
   }
 
   const data = await response.json();
-  const output = data.output_text || data.outputText || data.candidates?.[0]?.content?.parts
-    ?.map((part) => part.text)
-    .filter(Boolean)
-    .join("\n");
+  const output = extractGeminiText(data);
 
   if (!output) {
-    throw new Error("Gemini returned no article text.");
+    throw new Error(`Gemini returned no article text. Response keys: ${Object.keys(data).join(", ")}`);
   }
 
   return extractJson(output);
