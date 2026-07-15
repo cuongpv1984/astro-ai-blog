@@ -5,7 +5,9 @@ import matter from "gray-matter";
 
 const root = process.cwd();
 const postsDir = path.join(root, "src", "content", "posts");
+const provider = process.env.AI_PROVIDER || (process.env.GEMINI_API_KEY ? "gemini" : "openai");
 const preferredModel = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const geminiModel = process.env.GEMINI_MODEL || "gemini-3.5-flash";
 const fallbackModels = [
   preferredModel,
   "gpt-4o-mini",
@@ -55,22 +57,22 @@ async function listRecentPosts() {
 function extractJson(text) {
   const trimmed = text.trim();
   const fenced = trimmed.match(/```json\s*([\s\S]*?)```/i);
-  return JSON.parse(fenced ? fenced[1] : trimmed);
+  if (fenced) return JSON.parse(fenced[1]);
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const firstBrace = trimmed.indexOf("{");
+    const lastBrace = trimmed.lastIndexOf("}");
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      return JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
+    }
+    throw new Error("AI response did not contain valid JSON.");
+  }
 }
 
-async function requestArticleWithModel(modelName) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error("Missing OPENAI_API_KEY. Copy .env.example to .env and add your key.");
-  }
-
+async function buildPrompt() {
   const recentPosts = await listRecentPosts();
-  const prompt = {
-    role: "user",
-    content: [
-      {
-        type: "input_text",
-        text: `Create one original daily blog article in ${language}.
+  return `Create one original daily blog article in ${language}.
 
 Site topic: ${topic}
 Available categories: ${categories.join(", ")}
@@ -92,7 +94,22 @@ Rules:
 - Include a short FAQ section with 3 questions.
 - Do not invent statistics, studies, prices, or named sources.
 - Do not include the frontmatter block.
-- Keep the body between 800 and 1200 words.`,
+- Keep the body between 800 and 1200 words.`;
+}
+
+async function requestArticleWithOpenAIModel(modelName) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error("Missing OPENAI_API_KEY. Add it to GitHub Secrets or .env.");
+  }
+
+  const promptText = await buildPrompt();
+  const prompt = {
+    role: "user",
+    content: [
+      {
+        type: "input_text",
+        text: promptText,
       },
     ],
   };
@@ -136,12 +153,16 @@ Rules:
 }
 
 async function requestArticle() {
+  if (provider === "gemini") {
+    return requestArticleWithGemini();
+  }
+
   const errors = [];
 
   for (const modelName of fallbackModels) {
     try {
       console.log(`Trying OpenAI model: ${modelName}`);
-      return await requestArticleWithModel(modelName);
+      return await requestArticleWithOpenAIModel(modelName);
     } catch (error) {
       const body = String(error.body || error.message || "");
       if (error.status === 403 && body.includes("model_not_found")) {
@@ -155,6 +176,48 @@ async function requestArticle() {
   throw new Error(
     `No configured OpenAI model is available for this API key/project. Tried: ${errors.join(", ")}. Open the OpenAI dashboard, check the project's model access, or set GitHub variable OPENAI_MODEL to a model your project can use.`
   );
+}
+
+async function requestArticleWithGemini() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("Missing GEMINI_API_KEY. Add it to GitHub Secrets or .env.");
+  }
+
+  const promptText = await buildPrompt();
+  console.log(`Trying Gemini model: ${geminiModel}`);
+
+  const response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
+    method: "POST",
+    headers: {
+      "x-goog-api-key": apiKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: geminiModel,
+      input: promptText,
+      generation_config: {
+        temperature: 0.8,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Gemini request failed for model ${geminiModel}: ${response.status} ${body}`);
+  }
+
+  const data = await response.json();
+  const output = data.output_text || data.outputText || data.candidates?.[0]?.content?.parts
+    ?.map((part) => part.text)
+    .filter(Boolean)
+    .join("\n");
+
+  if (!output) {
+    throw new Error("Gemini returned no article text.");
+  }
+
+  return extractJson(output);
 }
 
 async function writeArticle(article) {
