@@ -11,16 +11,13 @@ permissions:
 jobs:
   create-post:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: astro-ai-blog
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: astro-ai-blog/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npm run new:ai
         env:
@@ -34,4 +31,4 @@ jobs:
       - uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "Add daily AI post"
-          file_pattern: astro-ai-blog/src/content/posts/*.md
+          file_pattern: src/content/posts/*.md
