@@ -30,7 +30,14 @@ jobs:
       - run: npm run build
         env:
           SITE_URL: ${{ vars.SITE_URL || 'https://example.com' }}
-      - uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "Add daily AI post"
-          file_pattern: src/content/posts/*.md
+      - name: Commit new post
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/content/posts/*.md
+          if git diff --cached --quiet; then
+            echo "No new post to commit."
+            exit 0
+          fi
+          git commit -m "Add daily AI post"
+          git push
